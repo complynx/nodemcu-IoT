@@ -64,7 +64,7 @@ static int lgpio_trig( lua_State* L )
   }else if(sl == 4 && c_strcmp(str, "down") == 0){
     type = GPIO_PIN_INTR_NEGEDGE;
   }else if(sl == 4 && c_strcmp(str, "both") == 0){
-    type = GPIO_PIN_INTR_ANYEGDE;
+    type = 3;//GPIO_PIN_INTR_ANYEDGE=3, but I dunno why this define does not appear here
   }else if(sl == 3 && c_strcmp(str, "low") == 0){
     type = GPIO_PIN_INTR_LOLEVEL;
   }else if(sl == 4 && c_strcmp(str, "high") == 0){

@@ -34,6 +34,9 @@ LUALIB_API int ( luaopen_pwm )( lua_State *L );
 #define AUXLIB_PWMLED    "pwmled"
 LUALIB_API int ( luaopen_pwmled )( lua_State *L );
 
+#define AUXLIB_ZCDIMMER    "zcdimmer"
+LUALIB_API int ( luaopen_zcdimmer )( lua_State *L );
+
 #define AUXLIB_PACK     "pack"
 LUALIB_API int ( luaopen_pack )( lua_State *L );
 

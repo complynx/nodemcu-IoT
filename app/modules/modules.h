@@ -192,10 +192,19 @@
 #define ROM_MODULES_DHT
 #endif
 
+#if defined(LUA_USE_MODULES_ZCDIMMER)
+#define MODULES_ZCDIMMER         "zcdimmer"
+#define ROM_MODULES_ZCDIMMER     \
+    _ROM(MODULES_ZCDIMMER, luaopen_zcdimmer, zcdimmer_map)
+#else
+#define ROM_MODULES_ZCDIMMER
+#endif
+
 #define LUA_MODULES_ROM     \
         ROM_MODULES_GPIO    \
         ROM_MODULES_PWM		\
         ROM_MODULES_PWMLED	\
+        ROM_MODULES_ZCDIMMER \
         ROM_MODULES_WIFI	\
         ROM_MODULES_COAP	\
         ROM_MODULES_MQTT    \

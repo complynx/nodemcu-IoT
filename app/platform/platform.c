@@ -7,6 +7,7 @@
 #include "gpio.h"
 #include "user_interface.h"
 #include "driver/uart.h"
+#include "zcdetector.h"
 // Platform specific includes
 
 static void pwms_init();
@@ -138,6 +139,7 @@ int platform_gpio_read( unsigned pin )
 }
 
 #ifdef GPIO_INTERRUPT_ENABLE
+#ifndef ZCDETECTOR
 static void platform_gpio_intr_dispatcher( platform_gpio_intr_handler_fn_t cb){
   uint8 i, level;
   uint32 gpio_status = GPIO_REG_READ(GPIO_STATUS_ADDRESS);
@@ -155,6 +157,30 @@ static void platform_gpio_intr_dispatcher( platform_gpio_intr_handler_fn_t cb){
     }
   }
 }
+#else
+static void platform_gpio_intr_dispatcher( platform_gpio_intr_handler_fn_t cb){
+  uint8 i, level;
+  uint32 gpio_status = GPIO_REG_READ(GPIO_STATUS_ADDRESS);
+  if(gpio_status & zeroCrossCalculator.pin_internal_bit){
+      gpio_pin_intr_state_set(zeroCrossCalculator.pin_internal_gpio, GPIO_PIN_INTR_DISABLE);
+      GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, gpio_status & zeroCrossCalculator.pin_internal_bit);
+      ZCD_tick();
+      gpio_pin_intr_state_set(zeroCrossCalculator.pin_internal_gpio,3);//GPIO_PIN_INTR_ANYEDGE=3, but I dunno why this define does not appear here
+  }else for (i = 0; i < GPIO_PIN_NUM; i++) {
+    if (pin_int_type[i] && (gpio_status & BIT(pin_num[i])) ) {
+      //disable interrupt
+      gpio_pin_intr_state_set(GPIO_ID_PIN(pin_num[i]), GPIO_PIN_INTR_DISABLE);
+      //clear interrupt status
+      GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, gpio_status & BIT(pin_num[i]));
+      level = 0x1 & GPIO_INPUT_GET(GPIO_ID_PIN(pin_num[i]));
+      if(cb){
+        cb(i, level);
+      }
+      gpio_pin_intr_state_set(GPIO_ID_PIN(pin_num[i]), pin_int_type[i]);
+    }
+  }
+}
+#endif
 
 void platform_gpio_init( platform_gpio_intr_handler_fn_t cb )
 {
