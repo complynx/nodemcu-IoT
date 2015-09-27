@@ -23,7 +23,7 @@ extern int ets_uart_printf(char* fmt,...);
 
 
 ZeroCrossCalculator zeroCrossCalculator={
-		/*times*/{0,0,0,0},
+		/*times*/{0,0,0,0,0,0},
 		/*detector_shift*/0,
 		/*half period*/0,
 		/*current_time*/0,
@@ -32,38 +32,60 @@ ZeroCrossCalculator zeroCrossCalculator={
 		/*pin_num*/0,
 		/*pin internals*/0,0
 };
-
+int printdebug=0;
 void ZCD_tick(){
-   u32 T=system_get_time();
-   u16 dt1,dt2;
-   size_t i;
-   if(T<zeroCrossCalculator.times[zeroCrossCalculator.current_time]){
-	  for(i=0;i<times_size;++i){
-		  zeroCrossCalculator.times[i]=0;
-	  }
-	  zeroCrossCalculator.current_time=times_size;
-	  zeroCrossCalculator.last_overflow=times_size;
-   }
-   INCI(zeroCrossCalculator.current_time,times_size);
-   zeroCrossCalculator.times[zeroCrossCalculator.current_time]=T;
+	u32 T=system_get_time();
+	u32 dt1,dt2,dtm;
+	size_t i;
+	if(T<zeroCrossCalculator.times[zeroCrossCalculator.current_time]){
+		for(i=0;i<times_size;++i){
+			zeroCrossCalculator.times[i]=0;
+		}
+		zeroCrossCalculator.current_time=times_size;
+		zeroCrossCalculator.last_overflow=times_size;
+	}
+	INCI(zeroCrossCalculator.current_time,times_size);
+	zeroCrossCalculator.times[zeroCrossCalculator.current_time]=T;
 
-   if(zeroCrossCalculator.last_overflow) --zeroCrossCalculator.last_overflow;
-   else{
-	  i=zeroCrossCalculator.current_time;
-	  dt1=((zeroCrossCalculator.times[i]-zeroCrossCalculator.times[DECI(i,times_size)])
-			  +(zeroCrossCalculator.times[DECI(i,times_size)]-zeroCrossCalculator.times[DECI(i,times_size)])
-			  )>>1;
-	  i=zeroCrossCalculator.current_time;
-	  dt2=((zeroCrossCalculator.times[DECI(i,times_size)]-zeroCrossCalculator.times[DECI(i,times_size)])
-			  +(zeroCrossCalculator.times[DECI(i,times_size)]-zeroCrossCalculator.times[DECI(i,times_size)])
-			  )>>1;
-	  if(dt1>dt2){
-		 zeroCrossCalculator.tick_tock=1;
-		 SWAP(dt1,dt2);
-	  }else zeroCrossCalculator.tick_tock=0;
-	  zeroCrossCalculator.detector_shift=(dt2-dt1)>>1;
-	  zeroCrossCalculator.halfperiod=(dt2+dt1)>>1;
-   }
+	if(zeroCrossCalculator.last_overflow>0){ --zeroCrossCalculator.last_overflow;
+	}else{
+		i=zeroCrossCalculator.current_time;
+		dt1=zeroCrossCalculator.times[i];
+		dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt1+=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt1>>=1;
+		i=zeroCrossCalculator.current_time;
+		dt2=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt2-=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt2+=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt2-=zeroCrossCalculator.times[DECI(i,times_size)];
+		dt2>>=1;
+		i=zeroCrossCalculator.current_time;
+		if(dt1>dt2){
+			zeroCrossCalculator.tick_tock=1;
+			SWAP(dt1,dt2);
+		}else zeroCrossCalculator.tick_tock=0;
+		dtm=dt2;
+		dtm-=dt1;
+		dtm>>=1;
+		zeroCrossCalculator.detector_shift=dtm;
+		dtm=dt2;
+		dtm+=dt1;
+		dtm>>=1;
+		zeroCrossCalculator.halfperiod=dtm;
+	}
+	if(printdebug){
+		printdebug=0;
+		ets_uart_printf("DEBUG: Dt: %lu %lu \n",dt1,dt2);
+	}
+}
+
+static void clearZCC(){
+	zeroCrossCalculator.current_time=0;
+	zeroCrossCalculator.last_overflow=times_size;
+	zeroCrossCalculator.halfperiod=0;
+	zeroCrossCalculator.detector_shift=0;
 }
 
 // Lua: realfrequency = setup( id_ZCD,id_lamp)
@@ -81,6 +103,7 @@ static int zcdimmer_lua_setup( lua_State* L )
 	zeroCrossCalculator.pin_internal_gpio=GPIO_ID_PIN(pn);
 	pm=pin_mux[id_ZCD];
 	pf=pin_func[id_ZCD];
+	clearZCC();
 
     PIN_PULLDWN_DIS(pm);
     PIN_PULLUP_EN(pm);
@@ -109,6 +132,7 @@ static int zcdimmer_lua_debuginfo( lua_State* L )
 {
 	ets_uart_printf("Shift: %lu, T/2: %lu\n",zeroCrossCalculator.detector_shift,zeroCrossCalculator.halfperiod);
 	ets_uart_printf("Tock: %d\n",zeroCrossCalculator.tick_tock);
+	printdebug=1;
 	return 1;
 }
 
