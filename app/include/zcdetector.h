@@ -26,6 +26,9 @@ typedef struct {
 	proc_word pin_num;
 	u16 pin_internal_bit;
 	u32 pin_internal_gpio;
+	u32 deltas[times_size];
+	u32 delta_inc;
+	u32 delta_c;
 } ZeroCrossCalculator;
 
 extern ZeroCrossCalculator zeroCrossCalculator;

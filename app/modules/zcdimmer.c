@@ -30,7 +30,9 @@ ZeroCrossCalculator zeroCrossCalculator={
 		/*current_time*/0,
 		/*last_overflow*/times_size,
 		/*pin_num*/0,
-		/*pin internals*/0,0
+		/*pin internals*/0,0,
+		/*deltas*/{0,0,0,0,0,0,0,0,0},
+		/*delta inc*/0
 };
 int printdebug=0;
 void ZCD_tick(){
@@ -45,6 +47,7 @@ void ZCD_tick(){
 		}
 		zeroCrossCalculator.current_time=times_size;
 		zeroCrossCalculator.last_overflow=times_size;
+		zeroCrossCalculator.delta_inc=0;
 	}
 	INCI(zeroCrossCalculator.current_time,times_size);
 	zeroCrossCalculator.times[zeroCrossCalculator.current_time]=T;
@@ -52,39 +55,60 @@ void ZCD_tick(){
 
 	if(zeroCrossCalculator.last_overflow>0){ --zeroCrossCalculator.last_overflow;
 	}else{
-		for(dt1=0,i=zeroCrossCalculator.current_time,j=1ul<<(times_size_b-1);j;--j){
-			dt1+=zeroCrossCalculator.times[i];
-			dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
-			DECI(i,times_size);
-		}
-		dt1>>=times_size_b-1;
-		for(dt2=0,i=zeroCrossCalculator.current_time,j=1ul<<(times_size_b-1);j;--j){
-			dt2+=zeroCrossCalculator.times[DECI(i,times_size)];
-			dt2-=zeroCrossCalculator.times[DECI(i,times_size)];
-		}
-		dt2>>=times_size_b-1;
 		i=zeroCrossCalculator.current_time;
-		if(dt1>dt2){
-			//even if we know for sure which of these is bigger through "last_state" param,
-			//it is safer to test and swap these two on their own.
-			SWAP(dt1,dt2);
+		dt1=zeroCrossCalculator.times[i];
+		dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
+		INCI(zeroCrossCalculator.delta_c,times_size);
+		zeroCrossCalculator.deltas[zeroCrossCalculator.delta_c]=dt1;
+		dt1+=zeroCrossCalculator.delta_inc;
+		if(dt1<2000){
+				zeroCrossCalculator.delta_inc=dt1;
+				DECI(zeroCrossCalculator.current_time,times_size);
+		}else{
+			if(dt1>15000){
+				zeroCrossCalculator.delta_inc=0;
+			}
+			for(dt1=0,i=zeroCrossCalculator.current_time,j=1ul<<(times_size_b-1);j;--j){
+				dt1+=zeroCrossCalculator.times[i];
+				dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
+				DECI(i,times_size);
+			}
+			dt1+=zeroCrossCalculator.delta_inc;
+			zeroCrossCalculator.delta_inc=0;
+			dt1>>=times_size_b-1;
+			for(dt2=0,i=zeroCrossCalculator.current_time,j=1ul<<(times_size_b-1);j;--j){
+				dt2+=zeroCrossCalculator.times[DECI(i,times_size)];
+				dt2-=zeroCrossCalculator.times[DECI(i,times_size)];
+			}
+			dt2>>=times_size_b-1;
+			i=zeroCrossCalculator.current_time;
+			if(dt1>dt2){
+				//even if we know for sure which of these is bigger through "last_state" param,
+				//it is safer to test and swap these two on their own.
+				SWAP(dt1,dt2);
+			}
+			dtm=dt2;
+			dtm-=dt1;
+			dtm>>=1;
+			zeroCrossCalculator.detector_shift=dtm;
+			dtm=dt2;
+			dtm+=dt1;
+			dtm>>=1;
+			zeroCrossCalculator.halfperiod=dtm;
 		}
-		dtm=dt2;
-		dtm-=dt1;
-		dtm>>=1;
-		zeroCrossCalculator.detector_shift=dtm;
-		dtm=dt2;
-		dtm+=dt1;
-		dtm>>=1;
-		zeroCrossCalculator.halfperiod=dtm;
 	}
 	if(printdebug){
 		printdebug=0;
 		for(i=0;i<times_size;++i){
 			ets_uart_printf("%lx ",zeroCrossCalculator.times[i]);
 		}
+		ets_uart_printf("\n");
+		for(i=0;i<times_size;++i){
+			ets_uart_printf("%lu ",zeroCrossCalculator.deltas[i]);
+		}
 		ets_uart_printf("\nDEBUG: Dt: %lu %lu, lo: %d, s: %d\n",dt1,dt2,zeroCrossCalculator.last_overflow,zeroCrossCalculator.last_state);
 		ets_uart_printf("DEBUG: T: %lx, ct: %d \n",T,zeroCrossCalculator.current_time);
+		ets_uart_printf("DEBUG: T/2: %lx, shift: %lx \n",T,zeroCrossCalculator.halfperiod,zeroCrossCalculator.detector_shift);
 	}
 }
 
@@ -113,7 +137,7 @@ static int zcdimmer_lua_setup( lua_State* L )
 	clearZCC();
 
     PIN_PULLDWN_DIS(pm);
-    PIN_PULLUP_DIS(pm);
+    PIN_PULLUP_EN(pm);
     ETS_GPIO_INTR_DISABLE();
     PIN_FUNC_SELECT(pm,pf);
     GPIO_DIS_OUTPUT(pn);
