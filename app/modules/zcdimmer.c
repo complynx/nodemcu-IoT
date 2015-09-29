@@ -31,10 +31,14 @@ ZeroCrossCalculator zeroCrossCalculator={
 		/*last_overflow*/times_size,
 		/*pin_num*/0,
 		/*pin internals*/0,0,
+#ifdef ZCDETECTOR_DEBUG
 		/*deltas*/{0,0,0,0,0,0,0,0,0},
+#endif
 		/*delta inc*/0
 };
+#ifdef ZCDETECTOR_DEBUG
 int printdebug=0;
+#endif
 void ZCD_tick(){
 	u32 T=system_get_time();
 	register u32 dt1,dt2,dtm=GPIO_INPUT_GET(zeroCrossCalculator.pin_internal_gpio);
@@ -58,8 +62,10 @@ void ZCD_tick(){
 		i=zeroCrossCalculator.current_time;
 		dt1=zeroCrossCalculator.times[i];
 		dt1-=zeroCrossCalculator.times[DECI(i,times_size)];
+#ifdef ZCDETECTOR_DEBUG
 		INCI(zeroCrossCalculator.delta_c,times_size);
 		zeroCrossCalculator.deltas[zeroCrossCalculator.delta_c]=dt1;
+#endif
 		dt1+=zeroCrossCalculator.delta_inc;
 		if(dt1<2000){
 				zeroCrossCalculator.delta_inc=dt1;
@@ -97,6 +103,7 @@ void ZCD_tick(){
 			zeroCrossCalculator.halfperiod=dtm;
 		}
 	}
+#ifdef ZCDETECTOR_DEBUG
 	if(printdebug){
 		printdebug=0;
 		for(i=0;i<times_size;++i){
@@ -110,6 +117,7 @@ void ZCD_tick(){
 		ets_uart_printf("DEBUG: T: %lx, ct: %d \n",T,zeroCrossCalculator.current_time);
 		ets_uart_printf("DEBUG: T/2: %lx, shift: %lx \n",T,zeroCrossCalculator.halfperiod,zeroCrossCalculator.detector_shift);
 	}
+#endif
 }
 
 static void clearZCC(){
@@ -163,7 +171,9 @@ static int zcdimmer_lua_debuginfo( lua_State* L )
 {
 	ets_uart_printf("Shift: %lu, T/2: %lu\n",zeroCrossCalculator.detector_shift,zeroCrossCalculator.halfperiod);
 	ets_uart_printf("Last state: %d\n",zeroCrossCalculator.last_state);
+#ifdef ZCDETECTOR_DEBUG
 	printdebug=1;
+#endif
 	return 1;
 }
 

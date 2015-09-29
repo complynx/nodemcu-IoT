@@ -14,6 +14,8 @@ typedef __UINT_FAST8_TYPE__ proc_uword;
 #define PROC_WORD_SIZE (sizeof(__INT_FAST8_TYPE__))
 #define ZCDETECTOR
 
+#define ZCDETECTOR_DEBUG
+
 #define times_size_b 3
 #define times_size ((1ul)<<(times_size_b)+1)
 typedef struct {
@@ -26,7 +28,9 @@ typedef struct {
 	proc_word pin_num;
 	u16 pin_internal_bit;
 	u32 pin_internal_gpio;
+#ifdef ZCDETECTOR_DEBUG
 	u32 deltas[times_size];
+#endif
 	u32 delta_inc;
 	u32 delta_c;
 } ZeroCrossCalculator;
