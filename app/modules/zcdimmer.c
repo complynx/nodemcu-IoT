@@ -21,6 +21,24 @@ extern int ets_uart_printf(char* fmt,...);
 #define INCI(i,size) ((i)=(((i)>=(size)-1)?0:((i)+1)))
 #define SWAP(a,b) ((a)^=(b),(b)^=(a),(a)^=(b))
 
+LOCAL u8 dimmer_absolute[]={
+		0,14,19,24,29,32,36,39,43,44,
+		48,49,53,54,58,60,61,63,65,66,
+		68,71,73,75,77,78,80,82,82,83,
+		85,87,88,90,92,94,95,97,97,99,
+		100,102,104,105,105,107,109,111,112,114,
+		114,116,117,119,121,122,124,124,126,128,
+		129,131,133,134,134,136,138,139,141,143,
+		145,146,148,150,151,153,155,156,158,160,
+		162,163,165,168,170,172,173,177,179,182,
+		184,187,190,194,197,202,207,214,223,255
+};
+
+LOCAL os_timer_t zcd_timer;
+LOCAL u8 dimval=0,dimval_abs=0;
+LOCAL u32 lamppin=0;
+LOCAL uint32_t lamppin_bit;
+LOCAL u32 dt=5;//usec to open a triac;
 
 ZeroCrossCalculator zeroCrossCalculator={
 		/*times*/{0,0,0,0,0,0,0,0,0},
@@ -37,8 +55,59 @@ ZeroCrossCalculator zeroCrossCalculator={
 		/*delta inc*/0
 };
 #ifdef ZCDETECTOR_DEBUG
-int printdebug=0;
+int printdebug=0,swap=0;
 #endif
+static void setdimval(u8 d);
+
+u32 ZCD_getNearestDimTime(){
+	u32 t0=zeroCrossCalculator.times[zeroCrossCalculator.current_time],
+			T2=zeroCrossCalculator.halfperiod,ct,
+			Dt=zeroCrossCalculator.detector_shift;
+	size_t i;
+	if(zeroCrossCalculator.last_state){
+		//t0+=Dt;//see the detector tick for more info
+	}else{
+		//t0-=Dt;
+		//This is not a good solution due to the instability of the falling edge.
+		i=zeroCrossCalculator.current_time;
+		t0=zeroCrossCalculator.times[DECI(i,times_size)];
+		t0+=T2;
+	}
+	ct=system_get_time();
+	if(t0>ct) t0-=T2;
+	Dt=256;
+	Dt-=dimval_abs;
+	Dt*=T2;
+	Dt>>=8;
+	Dt+=t0;
+	if(Dt<ct) Dt+=T2;
+	return Dt-ct;//time to nearest opening
+}
+
+void ZCD_planFire();
+void ZCD_delayedFire(u32 Dt){
+	if(Dt<1000){//Now we need to wait us.
+		os_delay_us(Dt);
+	}//else -- Dt already contains next time position. Fire now.
+	gpio_output_set(lamppin_bit, 0, lamppin_bit, 0);
+	os_delay_us(dt);
+	gpio_output_set(0,lamppin_bit, lamppin_bit, 0);
+	ZCD_planFire();
+}
+
+void ZCD_planFire(){
+    if(dimval){
+    	os_timer_disarm(&zcd_timer);
+		u32 Dt=ZCD_getNearestDimTime();
+		if(Dt>1000){//use OS timer, which uses ms rather than us.
+			Dt/=1000;
+			os_timer_arm(&zcd_timer, Dt, 0);
+		}else{
+			ZCD_delayedFire(Dt);
+		}
+    }
+}
+
 void ZCD_tick(){
 	u32 T=system_get_time();
 	register u32 dt1,dt2,dtm=GPIO_INPUT_GET(zeroCrossCalculator.pin_internal_gpio);
@@ -91,11 +160,12 @@ void ZCD_tick(){
 			if(dt1>dt2){
 				//even if we know for sure which of these is bigger through "last_state" param,
 				//it is safer to test and swap these two on their own.
+				//last_state=0 here
 				SWAP(dt1,dt2);
 			}
 			dtm=dt2;
 			dtm-=dt1;
-			dtm>>=1;
+//			dtm>>=1;//my ZCD falls to slow, but regains voltage fast at the very edge.
 			zeroCrossCalculator.detector_shift=dtm;
 			dtm=dt2;
 			dtm+=dt1;
@@ -103,6 +173,7 @@ void ZCD_tick(){
 			zeroCrossCalculator.halfperiod=dtm;
 		}
 	}
+	ZCD_planFire();
 #ifdef ZCDETECTOR_DEBUG
 	if(printdebug){
 		printdebug=0;
@@ -115,7 +186,7 @@ void ZCD_tick(){
 		}
 		ets_uart_printf("\nDEBUG: Dt: %lu %lu, lo: %d, s: %d\n",dt1,dt2,zeroCrossCalculator.last_overflow,zeroCrossCalculator.last_state);
 		ets_uart_printf("DEBUG: T: %lx, ct: %d \n",T,zeroCrossCalculator.current_time);
-		ets_uart_printf("DEBUG: T/2: %lx, shift: %lx \n",T,zeroCrossCalculator.halfperiod,zeroCrossCalculator.detector_shift);
+		ets_uart_printf("DEBUG: T/2: %lu, shift: %lu \n",zeroCrossCalculator.halfperiod,zeroCrossCalculator.detector_shift);
 	}
 #endif
 }
@@ -127,15 +198,22 @@ static void clearZCC(){
 	zeroCrossCalculator.detector_shift=0;
 }
 
+static void zcdimmer_timer_cb(){
+    os_timer_disarm(&zcd_timer);
+	u32 Dt=ZCD_getNearestDimTime();
+	ZCD_delayedFire(Dt);
+}
+
 // Lua: realfrequency = setup( id_ZCD,id_lamp)
 static int zcdimmer_lua_setup( lua_State* L )
 {
 	u32 id_ZCD=luaL_checkinteger( L, 1 );
 	u8 pn,pf;
 	u32 pm;
-//	u32 id_lamp=luaL_checkinteger( L, 2 );
+	lamppin=luaL_checkinteger( L, 2 );
 	MOD_CHECK_ID( gpio, id_ZCD );
-//	MOD_CHECK_ID( gpio, id_lamp );
+	MOD_CHECK_ID( gpio, lamppin );
+
 	zeroCrossCalculator.pin_num=id_ZCD;
 	pn=pin_num[id_ZCD];
 	zeroCrossCalculator.pin_internal_bit=BIT(pn);
@@ -157,6 +235,13 @@ static int zcdimmer_lua_setup( lua_State* L )
     gpio_pin_intr_state_set(zeroCrossCalculator.pin_internal_gpio, 3);//GPIO_PIN_INTR_ANYEDGE=3, but I dunno why this define does not appear here
     ETS_GPIO_INTR_ENABLE();
 
+
+    os_timer_disarm(&zcd_timer);
+    os_timer_setfn(&zcd_timer, (os_timer_func_t *)zcdimmer_timer_cb,  (void *)NULL);
+    PIN_FUNC_SELECT(pin_mux[lamppin],pin_func[lamppin]);
+    lamppin_bit=1<<GPIO_ID_PIN(pin_num[lamppin]);
+    setdimval(dimval);
+
 	return 1;
 }
 
@@ -177,6 +262,29 @@ static int zcdimmer_lua_debuginfo( lua_State* L )
 	return 1;
 }
 
+static void setdimval(u8 d){
+	dimval=d;
+	dimval_abs=dimmer_absolute[dimval];
+#ifdef ZCDETECTOR_DEBUG
+	ets_uart_printf("dimval %d\n",dimval);
+#endif
+
+}
+
+static int zcdimmer_lua_setintensity( lua_State* L )
+{
+	u32 dim=luaL_checkinteger( L, 1 );
+	if(dim>99)	dim=99;
+	setdimval(dim);
+	return 1;
+}
+static int zcdimmer_lua_getintensity( lua_State* L )
+{
+	lua_pushinteger( L, dimval);
+	return 1;
+}
+
+
 
 // Module function map
 #define MIN_OPT_LEVEL 2
@@ -185,6 +293,8 @@ const LUA_REG_TYPE zcdimmer_map[] =
 {
   { LSTRKEY( "setup" ), LFUNCVAL( zcdimmer_lua_setup ) },
   { LSTRKEY( "close" ), LFUNCVAL( zcdimmer_lua_close ) },
+  { LSTRKEY( "setintensity" ), LFUNCVAL( zcdimmer_lua_setintensity ) },
+  { LSTRKEY( "getintensity" ), LFUNCVAL( zcdimmer_lua_getintensity ) },
   { LSTRKEY( "debuginfo" ), LFUNCVAL( zcdimmer_lua_debuginfo ) },
 #if LUA_OPTIMIZE_MEMORY > 0
 
