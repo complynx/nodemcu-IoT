@@ -7,7 +7,8 @@
 #include "auxmods.h"
 #include "lrotable.h"
 #include "gpio.h"
-
+#include "driver/hw_timer.h"
+#define MAYBE_EXIT_TO_BG os_delay_us(0)
 extern int ets_uart_printf(char* fmt,...);
 
 #include "c_types.h"
@@ -38,7 +39,9 @@ LOCAL os_timer_t zcd_timer;
 LOCAL u8 dimval=0,dimval_abs=0;
 LOCAL u32 lamppin=0;
 LOCAL uint32_t lamppin_bit;
-LOCAL u32 dt=5;//usec to open a triac;
+//LOCAL u32 dt=5;//usec to open a triac;
+LOCAL u8 hw_timer_armed=0;
+LOCAL u8 hw_timer_poll=10;//usec
 
 ZeroCrossCalculator zeroCrossCalculator={
 		/*times*/{0,0,0,0,0,0,0,0,0},
@@ -84,28 +87,38 @@ u32 ZCD_getNearestDimTime(){
 	return Dt-ct;//time to nearest opening
 }
 
-void ZCD_planFire();
-void ZCD_delayedFire(u32 Dt){
-	if(Dt<1000){//Now we need to wait us.
-		os_delay_us(Dt);
-	}//else -- Dt already contains next time position. Fire now.
-	gpio_output_set(lamppin_bit, 0, lamppin_bit, 0);
-	os_delay_us(dt);
-	gpio_output_set(0,lamppin_bit, lamppin_bit, 0);
-	ZCD_planFire();
-}
+//void ZCD_planFire();
+//void ZCD_delayedFire(u32 Dt){
+//	if(Dt && Dt<1000){//Now we need to wait us.
+//		os_delay_us(Dt);
+//	}//else -- Dt already contains next time position. Fire now.
+//	gpio_output_set(lamppin_bit, 0, lamppin_bit, 0);
+//	os_delay_us(dt);
+//	gpio_output_set(0,lamppin_bit, lamppin_bit, 0);
+//	ZCD_planFire();
+//}
+//
+//void ZCD_planFire(){
+//    if(dimval){
+//    	//os_timer_disarm(&zcd_timer);
+//		u32 Dt=ZCD_getNearestDimTime();
+//
+//		hw_timer_arm(US_TO_RTC_TIMER_TICKS(Dt));
+////		if(Dt>1000){//use OS timer, which uses ms rather than us.
+////			Dt/=1000;
+////			os_timer_arm(&zcd_timer, Dt, 0);
+////		}else{
+////			ZCD_delayedFire(Dt);
+////		}
+//    }
+//}
+//static u32 HW_DT,HW_T2;
 
-void ZCD_planFire(){
-    if(dimval){
-    	os_timer_disarm(&zcd_timer);
-		u32 Dt=ZCD_getNearestDimTime();
-		if(Dt>1000){//use OS timer, which uses ms rather than us.
-			Dt/=1000;
-			os_timer_arm(&zcd_timer, Dt, 0);
-		}else{
-			ZCD_delayedFire(Dt);
-		}
-    }
+void ZCD_startTimer(){
+	if(!hw_timer_armed){
+		hw_timer_armed=1;
+		hw_timer_arm(hw_timer_poll);
+	}
 }
 
 void ZCD_tick(){
@@ -140,6 +153,7 @@ void ZCD_tick(){
 				zeroCrossCalculator.delta_inc=dt1;
 				DECI(zeroCrossCalculator.current_time,times_size);
 		}else{
+			MAYBE_EXIT_TO_BG;
 			if(dt1>15000){
 				zeroCrossCalculator.delta_inc=0;
 			}
@@ -151,6 +165,7 @@ void ZCD_tick(){
 			dt1+=zeroCrossCalculator.delta_inc;
 			zeroCrossCalculator.delta_inc=0;
 			dt1>>=times_size_b-1;
+			MAYBE_EXIT_TO_BG;
 			for(dt2=0,i=zeroCrossCalculator.current_time,j=1ul<<(times_size_b-1);j;--j){
 				dt2+=zeroCrossCalculator.times[DECI(i,times_size)];
 				dt2-=zeroCrossCalculator.times[DECI(i,times_size)];
@@ -173,7 +188,8 @@ void ZCD_tick(){
 			zeroCrossCalculator.halfperiod=dtm;
 		}
 	}
-	ZCD_planFire();
+	MAYBE_EXIT_TO_BG;
+//	ZCD_planFire();
 #ifdef ZCDETECTOR_DEBUG
 	if(printdebug){
 		printdebug=0;
@@ -198,11 +214,53 @@ static void clearZCC(){
 	zeroCrossCalculator.detector_shift=0;
 }
 
-static void zcdimmer_timer_cb(){
-    os_timer_disarm(&zcd_timer);
-	u32 Dt=ZCD_getNearestDimTime();
-	ZCD_delayedFire(Dt);
+//static void zcdimmer_timer_cb(){
+//    os_timer_disarm(&zcd_timer);
+//	u32 Dt=ZCD_getNearestDimTime();
+//	ZCD_delayedFire(Dt);
+//}
+static u8 triac_open=0;
+static u32 HW_t_targ=0;
+static void zcdimmer_hw_timer_cb(){
+	if(hw_timer_armed){
+		if(dimval){
+			u32 ct=system_get_time();
+			if(triac_open){
+				gpio_output_set(0,lamppin_bit, lamppin_bit, 0);
+				triac_open=0;
+				u32 t0=zeroCrossCalculator.times[zeroCrossCalculator.current_time],
+							T2=zeroCrossCalculator.halfperiod,
+							Dt=zeroCrossCalculator.detector_shift;
+				size_t i;
+				if(zeroCrossCalculator.last_state){
+					//t0+=Dt;//see the detector tick for more info
+				}else{
+					//t0-=Dt;
+					//This is not a good solution due to the instability of the falling edge.
+					i=zeroCrossCalculator.current_time;
+					t0=zeroCrossCalculator.times[DECI(i,times_size)];
+					t0+=T2;
+				}
+				if(t0>ct) t0-=T2;
+				Dt=256;
+				Dt-=dimval_abs;
+				Dt*=T2;
+				Dt>>=8;
+				Dt+=t0;
+				if(Dt<ct) Dt+=T2;
+				HW_t_targ=Dt;
+			}else if(HW_t_targ<ct){
+				gpio_output_set(lamppin_bit,0, lamppin_bit, 0);
+				triac_open=1;
+			}
+
+			hw_timer_arm(hw_timer_poll);
+		}else{
+			hw_timer_armed=0;
+		}
+	}
 }
+
 
 // Lua: realfrequency = setup( id_ZCD,id_lamp)
 static int zcdimmer_lua_setup( lua_State* L )
@@ -236,8 +294,10 @@ static int zcdimmer_lua_setup( lua_State* L )
     ETS_GPIO_INTR_ENABLE();
 
 
-    os_timer_disarm(&zcd_timer);
-    os_timer_setfn(&zcd_timer, (os_timer_func_t *)zcdimmer_timer_cb,  (void *)NULL);
+//    os_timer_disarm(&zcd_timer);
+//    os_timer_setfn(&zcd_timer, (os_timer_func_t *)zcdimmer_timer_cb,  (void *)NULL);
+    hw_timer_init(FRC1_SOURCE,0);
+    hw_timer_set_func(zcdimmer_hw_timer_cb);
     PIN_FUNC_SELECT(pin_mux[lamppin],pin_func[lamppin]);
     lamppin_bit=1<<GPIO_ID_PIN(pin_num[lamppin]);
     setdimval(dimval);
@@ -256,6 +316,8 @@ static int zcdimmer_lua_debuginfo( lua_State* L )
 {
 	ets_uart_printf("Shift: %lu, T/2: %lu\n",zeroCrossCalculator.detector_shift,zeroCrossCalculator.halfperiod);
 	ets_uart_printf("Last state: %d\n",zeroCrossCalculator.last_state);
+	ets_uart_printf("Timers: triac: %d, dimval: %d, timer: %d\n",triac_open,dimval,hw_timer_armed);
+	ets_uart_printf("Timers: tt: %lx\n",HW_t_targ);
 #ifdef ZCDETECTOR_DEBUG
 	printdebug=1;
 #endif
@@ -265,6 +327,7 @@ static int zcdimmer_lua_debuginfo( lua_State* L )
 static void setdimval(u8 d){
 	dimval=d;
 	dimval_abs=dimmer_absolute[dimval];
+	ZCD_startTimer();
 #ifdef ZCDETECTOR_DEBUG
 	ets_uart_printf("dimval %d\n",dimval);
 #endif
